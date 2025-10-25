@@ -1,0 +1,159 @@
+#!/usr/bin/env fish
+
+# Script: aicommit
+# Version: 1.0.0
+# Description: Generate AI-powered commit messages using Claude Code (haiku model)
+
+set VERSION "1.0.0"
+set SCRIPT_NAME (basename (status filename))
+
+# Prompt for Claude Code to generate commit message
+set COMMIT_PROMPT "Analyze this git diff and generate a concise, professional commit message following conventional commit format. The message should have a short summary line (max 50 chars) and optionally a detailed body explaining the changes. Only output the commit message text, nothing else."
+
+function log_info
+    logger -t "$SCRIPT_NAME" -p user.info $argv
+end
+
+function log_error
+    logger -t "$SCRIPT_NAME" -p user.error $argv
+end
+
+function log_debug
+    logger -t "$SCRIPT_NAME" -p user.debug $argv
+end
+
+function show_version
+    echo "$SCRIPT_NAME version $VERSION"
+    exit 0
+end
+
+function usage
+    echo "Usage: $SCRIPT_NAME [options]"
+    echo ""
+    echo "Description: Generate commit messages using Claude Code (haiku model)"
+    echo "             Automatically stages all changes and opens message in editor for review"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help       Show this help message"
+    echo "  -v, --version    Show version information"
+    echo ""
+    echo "Environment:"
+    echo "  EDITOR           Editor to use for reviewing commit message (default: nvim)"
+    exit 0
+end
+
+function main
+    log_info "action=start status=checking_git_repo"
+
+    # Check if we're in a git repository
+    if not git rev-parse --git-dir >/dev/null 2>&1
+        log_error "action=fail error=\"not a git repository\""
+        echo "Error: Not a git repository"
+        exit 1
+    end
+
+    # Check if there are any changes to commit
+    if git diff --quiet && git diff --cached --quiet && not git ls-files --others --exclude-standard | grep -q .
+        log_info "action=complete status=no_changes"
+        echo "Nothing to commit - working tree is clean"
+        exit 0
+    end
+
+    log_info "action=staging status=adding_all_changes"
+    echo "Staging all changes..."
+
+    # Stage all changes
+    git add -A
+    if test $status -ne 0
+        log_error "action=fail error=\"failed to stage changes\""
+        echo "Error: Failed to stage changes"
+        exit 1
+    end
+
+    log_info "action=generate status=creating_commit_message"
+    echo "Generating commit message with Claude Code (haiku model)..."
+
+    # Create a temporary file for the commit message
+    set temp_msg (mktemp)
+    log_debug "action=create_temp file=\"$temp_msg\""
+
+    # Generate commit message using Claude Code with haiku model
+    # We'll ask Claude to analyze the staged diff and create a commit message
+    git diff --cached | ~/.claude/local/claude --print --dangerously-skip-permissions --model haiku "$COMMIT_PROMPT" >$temp_msg 2>&1
+
+    if test $status -ne 0
+        log_error "action=fail error=\"claude-code failed\""
+        echo "Error: Failed to generate commit message with Claude Code"
+        rm -f $temp_msg
+        exit 1
+    end
+
+    # Check if the generated message is empty
+    if not test -s $temp_msg
+        log_error "action=fail error=\"empty commit message generated\""
+        echo "Error: Generated commit message is empty"
+        rm -f $temp_msg
+        exit 1
+    end
+
+    log_info "action=review status=opening_editor"
+    echo "Opening commit message in editor for review..."
+
+    # Open in editor for review
+    set editor $EDITOR
+    if test -z "$editor"
+        set editor nvim
+    end
+
+    $editor $temp_msg
+    if test $status -ne 0
+        log_error "action=fail error=\"editor exited with error\""
+        echo "Error: Editor exited with error"
+        rm -f $temp_msg
+        exit 1
+    end
+
+    # Check if message is still present and not empty after editing
+    if not test -s $temp_msg
+        log_info "action=abort status=empty_message"
+        echo "Commit aborted: empty message"
+        rm -f $temp_msg
+        exit 1
+    end
+
+    log_info "action=commit status=creating_commit"
+    echo "Creating commit..."
+
+    # Commit with the edited message
+    git commit -F $temp_msg
+    set commit_status $status
+
+    # Clean up temp file
+    rm -f $temp_msg
+
+    if test $commit_status -eq 0
+        log_info "action=complete status=success"
+        echo "Commit created successfully!"
+    else
+        log_error "action=fail error=\"git commit failed\" status=$commit_status"
+        echo "Error: Commit failed"
+        exit 1
+    end
+end
+
+# Parse arguments
+argparse 'h/help' 'v/version' -- $argv
+or begin
+    usage
+end
+
+if set -q _flag_help
+    usage
+end
+
+if set -q _flag_version
+    show_version
+end
+
+log_debug "action=init args=\"$argv\""
+main

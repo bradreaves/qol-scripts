@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(shell-script-installer)",
+      "Bash(git checkout:*)",
+      "Bash(./aicommit:*)",
+      "Bash(EDITOR=cat ./aicommit:*)",
+      "Read(//private/var/folders/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
