@@ -5,7 +5,11 @@
       "Bash(git checkout:*)",
       "Bash(./aicommit:*)",
       "Bash(EDITOR=cat ./aicommit:*)",
-      "Read(//private/var/folders/**)"
+      "Read(//private/var/folders/**)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
