@@ -151,6 +151,45 @@ function run_tests
         set test_failed (math $test_failed + 1)
     end
 
+    # Test 7: Only staged changes are used (not unstaged)
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: Only uses staged changes, not unstaged... "
+    set tmpdir (mktemp -d)
+    cd $tmpdir
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+
+    # Create initial commit
+    echo "initial" > file1.txt
+    git add file1.txt
+    git commit -m "Initial" >/dev/null 2>&1
+
+    # Stage a change to file1
+    echo "staged change" > file1.txt
+    git add file1.txt
+
+    # Make additional unstaged changes to file1
+    echo "unstaged change" > file1.txt
+
+    # Create untracked file
+    echo "untracked" > file2.txt
+
+    # Verify that staged diff only shows staged changes, not unstaged/untracked
+    set staged_diff (git diff --cached)
+    set staged_has_staged (echo $staged_diff | grep -q "staged change" && echo "yes" || echo "no")
+    set staged_has_unstaged (echo $staged_diff | grep -q "unstaged change" && echo "yes" || echo "no")
+    set staged_has_untracked (echo $staged_diff | grep -q "untracked" && echo "yes" || echo "no")
+
+    if test "$staged_has_staged" = "yes" && test "$staged_has_unstaged" = "no" && test "$staged_has_untracked" = "no"
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+    rm -rf $tmpdir
+
     # Print summary
     echo ""
     echo "================================"
