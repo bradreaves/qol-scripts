@@ -3,6 +3,7 @@
 # Script: aicommit
 # Version: 1.2.0
 # Description: Generate AI-powered commit messages using Claude Code (haiku model)
+# Installation: Copy to ~/bin/scripts
 
 set VERSION "1.2.0"
 set SCRIPT_NAME (basename (status filename))
