@@ -1,10 +1,10 @@
 #!/usr/bin/env fish
 
 # Script: aicommit
-# Version: 1.0.0
+# Version: 1.1.0
 # Description: Generate AI-powered commit messages using Claude Code (haiku model)
 
-set VERSION "1.0.0"
+set VERSION "1.1.0"
 set SCRIPT_NAME (basename (status filename))
 
 # Prompt for Claude Code to generate commit message
@@ -31,9 +31,11 @@ function usage
     echo "Usage: $SCRIPT_NAME [options]"
     echo ""
     echo "Description: Generate commit messages using Claude Code (haiku model)"
-    echo "             Automatically stages all changes and opens message in editor for review"
+    echo "             If files are already staged, uses only those changes."
+    echo "             Otherwise stages all changes unless --add-all is used."
     echo ""
     echo "Options:"
+    echo "  -a, --add-all    Stage all changes (default: use only staged changes)"
     echo "  -h, --help       Show this help message"
     echo "  -v, --version    Show version information"
     echo ""
@@ -59,15 +61,34 @@ function main
         exit 0
     end
 
-    log_info "action=staging status=adding_all_changes"
-    echo "Staging all changes..."
+    # Check if there are already staged changes
+    set has_staged (not git diff --cached --quiet)
 
-    # Stage all changes
-    git add -A
-    if test $status -ne 0
-        log_error "action=fail error=\"failed to stage changes\""
-        echo "Error: Failed to stage changes"
-        exit 1
+    # Determine if we should stage all changes
+    if set -q _flag_add_all
+        # User explicitly requested --add-all, stage all changes
+        log_info "action=staging status=adding_all_changes_flag"
+        echo "Staging all changes (--add-all)..."
+        git add -A
+        if test $status -ne 0
+            log_error "action=fail error=\"failed to stage changes\""
+            echo "Error: Failed to stage changes"
+            exit 1
+        end
+    else if test -n "$has_staged"
+        # Already have staged changes, use only those
+        log_info "action=staging status=using_staged_changes"
+        echo "Using already-staged changes..."
+    else
+        # No staged changes, stage all by default
+        log_info "action=staging status=adding_all_changes"
+        echo "Staging all changes..."
+        git add -A
+        if test $status -ne 0
+            log_error "action=fail error=\"failed to stage changes\""
+            echo "Error: Failed to stage changes"
+            exit 1
+        end
     end
 
     log_info "action=generate status=creating_commit_message"
@@ -142,7 +163,7 @@ function main
 end
 
 # Parse arguments
-argparse 'h/help' 'v/version' -- $argv
+argparse 'a/add-all' 'h/help' 'v/version' -- $argv
 or begin
     usage
 end
