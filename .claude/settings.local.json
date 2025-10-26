@@ -9,7 +9,10 @@
       "Bash(git merge:*)",
       "Bash(git branch:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(aicommit:*)",
+      "Bash(fish -c:*)",
+      "Read(//Users/bgr/.claude/**)"
     ],
     "deny": [],
     "ask": []
