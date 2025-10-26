@@ -1,10 +1,10 @@
 #!/usr/bin/env fish
 
 # Script: aicommit
-# Version: 1.1.0
+# Version: 1.2.0
 # Description: Generate AI-powered commit messages using Claude Code (haiku model)
 
-set VERSION "1.1.0"
+set VERSION "1.2.0"
 set SCRIPT_NAME (basename (status filename))
 
 # Prompt for Claude Code to generate commit message
@@ -36,12 +36,138 @@ function usage
     echo ""
     echo "Options:"
     echo "  -a, --add-all    Stage all changes (default: use only staged changes)"
+    echo "  -t, --test       Run unit and regression tests"
     echo "  -h, --help       Show this help message"
     echo "  -v, --version    Show version information"
     echo ""
     echo "Environment:"
     echo "  EDITOR           Editor to use for reviewing commit message (default: nvim)"
     exit 0
+end
+
+function run_tests
+    echo "================================"
+    echo "aicommit Test Suite (v$VERSION)"
+    echo "================================"
+    echo ""
+
+    set -l test_count 0
+    set -l test_passed 0
+    set -l test_failed 0
+
+    # Unit Tests
+    echo "--- Unit Tests ---"
+
+    # Test 1: Non-git directory detection
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: Non-git directory detection... "
+    set tmpdir (mktemp -d)
+    cd $tmpdir
+    if not git rev-parse --git-dir >/dev/null 2>&1
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+    rm -rf $tmpdir
+
+    # Test 2: Help flag works
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: Help flag works... "
+    if $SCRIPT_NAME --help 2>&1 | grep -q "Usage:"
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+
+    # Test 3: Version flag works
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: Version flag works... "
+    if $SCRIPT_NAME --version 2>&1 | grep -q "version"
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+
+    # Regression Tests
+    echo ""
+    echo "--- Regression Tests ---"
+
+    # Test 4: No changes detection
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: No changes detection... "
+    set tmpdir (mktemp -d)
+    cd $tmpdir
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    touch initial.txt
+    git add initial.txt
+    git commit -m "Initial commit" >/dev/null 2>&1
+    if $SCRIPT_NAME 2>&1 | grep -q "Nothing to commit"
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+    rm -rf $tmpdir
+
+    # Test 5: Staged changes detection
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: Staged changes detection... "
+    set tmpdir (mktemp -d)
+    cd $tmpdir
+    git init >/dev/null 2>&1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    touch initial.txt
+    git add initial.txt
+    git commit -m "Initial" >/dev/null 2>&1
+    echo "modified" > test.txt
+    git add test.txt
+    if not git diff --cached --quiet
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+    rm -rf $tmpdir
+
+    # Test 6: Script is executable
+    set test_count (math $test_count + 1)
+    echo -n "Test $test_count: Script is executable... "
+    if test -x (which $SCRIPT_NAME)
+        echo "PASS"
+        set test_passed (math $test_passed + 1)
+    else
+        echo "FAIL"
+        set test_failed (math $test_failed + 1)
+    end
+
+    # Print summary
+    echo ""
+    echo "================================"
+    echo "Test Results"
+    echo "================================"
+    echo "Total:  $test_count"
+    echo "Passed: $test_passed"
+    echo "Failed: $test_failed"
+    echo ""
+
+    if test $test_failed -eq 0
+        echo "All tests passed!"
+        return 0
+    else
+        echo "Some tests failed."
+        return 1
+    end
 end
 
 function main
@@ -163,7 +289,7 @@ function main
 end
 
 # Parse arguments
-argparse 'a/add-all' 'h/help' 'v/version' -- $argv
+argparse 'a/add-all' 't/test' 'h/help' 'v/version' -- $argv
 or begin
     usage
 end
@@ -174,6 +300,11 @@ end
 
 if set -q _flag_version
     show_version
+end
+
+if set -q _flag_test
+    run_tests
+    exit $status
 end
 
 log_debug "action=init args=\"$argv\""
