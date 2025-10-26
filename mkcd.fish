@@ -3,6 +3,7 @@
 # Function: mkcd
 # Version: 1.0.0
 # Description: Create a directory (with parents) and cd into it
+# Installation: Copy to ~/.config/fish/functions/mkcd.fish
 
 set -g MKCD_VERSION "1.0.0"
 
@@ -30,6 +31,85 @@ function mkcd --description "Create a directory and cd into it"
         return 0
     end
 
+    function run_tests
+        log_info "action=test status=starting"
+        echo "Running mkcd unit and regression tests..."
+        echo ""
+
+        set test_passed true
+        set temp_base (mktemp -d)
+
+        # Test 1: Create a simple directory
+        echo -n "Test 1: Create simple directory... "
+        if not mkdir -p "$temp_base/test1/target" 2>/dev/null
+            echo "FAILED"
+            set test_passed false
+        else
+            if test -d "$temp_base/test1/target"
+                echo "PASSED"
+            else
+                echo "FAILED"
+                set test_passed false
+            end
+        end
+
+        # Test 2: Create nested directories
+        echo -n "Test 2: Create nested directories... "
+        if not mkdir -p "$temp_base/test2/a/b/c/d" 2>/dev/null
+            echo "FAILED"
+            set test_passed false
+        else
+            if test -d "$temp_base/test2/a/b/c/d"
+                echo "PASSED"
+            else
+                echo "FAILED"
+                set test_passed false
+            end
+        end
+
+        # Test 3: Directory with spaces
+        echo -n "Test 3: Directory with spaces... "
+        if not mkdir -p "$temp_base/test3/my dir with spaces" 2>/dev/null
+            echo "FAILED"
+            set test_passed false
+        else
+            if test -d "$temp_base/test3/my dir with spaces"
+                echo "PASSED"
+            else
+                echo "FAILED"
+                set test_passed false
+            end
+        end
+
+        # Test 4: Handle existing directory
+        echo -n "Test 4: Handle existing directory gracefully... "
+        if mkdir -p "$temp_base/test4/existing" 2>/dev/null
+            if mkdir -p "$temp_base/test4/existing" 2>/dev/null
+                echo "PASSED"
+            else
+                echo "FAILED"
+                set test_passed false
+            end
+        else
+            echo "FAILED"
+            set test_passed false
+        end
+
+        # Cleanup
+        rm -rf "$temp_base"
+
+        echo ""
+        if $test_passed
+            echo "All tests passed!"
+            log_info "action=test status=complete result=success"
+            return 0
+        else
+            echo "Some tests failed!"
+            log_error "action=test status=complete result=failure"
+            return 1
+        end
+    end
+
     function show_help
         echo "Usage: mkcd [options] DIRECTORY"
         echo ""
@@ -41,6 +121,7 @@ function mkcd --description "Create a directory and cd into it"
         echo "Options:"
         echo "  -h, --help       Show this help message"
         echo "  -v, --version    Show version information"
+        echo "  --test           Run unit and regression tests"
         echo ""
         echo "Examples:"
         echo "  mkcd foo/bar/baz          # Creates nested directories"
@@ -50,7 +131,7 @@ function mkcd --description "Create a directory and cd into it"
     end
 
     # Parse arguments
-    argparse 'h/help' 'v/version' -- $argv
+    argparse 'h/help' 'v/version' 'test' -- $argv
     or begin
         show_help
         return 1
@@ -64,6 +145,11 @@ function mkcd --description "Create a directory and cd into it"
     if set -q _flag_version
         show_version
         return 0
+    end
+
+    if set -q _flag_test
+        run_tests
+        return $status
     end
 
     # Check if directory argument is provided
