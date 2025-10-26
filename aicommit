@@ -187,9 +187,6 @@ function main
         exit 0
     end
 
-    # Check if there are already staged changes
-    set has_staged (not git diff --cached --quiet)
-
     # Determine if we should stage all changes
     if set -q _flag_add_all
         # User explicitly requested --add-all, stage all changes
@@ -201,7 +198,7 @@ function main
             echo "Error: Failed to stage changes"
             exit 1
         end
-    else if test -n "$has_staged"
+    else if not git diff --cached --quiet
         # Already have staged changes, use only those
         log_info "action=staging status=using_staged_changes"
         echo "Using already-staged changes..."
