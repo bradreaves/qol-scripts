@@ -1,115 +1,152 @@
 #!/usr/bin/env fish
 
 # Script: worktree
-# Version: 1.0.0
-# Description: Create git worktrees with automatic directory naming
-# Installation: Copy to ~/bin/scripts
+# Version: 1.1.0
+# Description: Create git worktrees with automatic directory naming and cd to it
+# Installation: Copy to ~/.config/fish/functions/worktree.fish (to enable cd) or ~/bin/scripts
 
-set VERSION "1.0.0"
-set SCRIPT_NAME (basename (status filename))
+function worktree
+    set -l VERSION "1.1.0"
+    set -l SCRIPT_NAME "worktree"
 
-function log_info
-    logger -t "$SCRIPT_NAME[$fish_pid]" -p user.info $argv
-end
-
-function log_error
-    logger -t "$SCRIPT_NAME[$fish_pid]" -p user.error $argv
-end
-
-function log_debug
-    logger -t "$SCRIPT_NAME[$fish_pid]" -p user.debug $argv
-end
-
-function show_version
-    echo "$SCRIPT_NAME version $VERSION"
-    exit 0
-end
-
-function run_tests
-    log_info "action=test status=starting"
-
-    echo "Running unit tests for worktree script..."
-    echo ""
-
-    # Test 1: Verify we can detect git repository
-    echo "Test 1: Git repository detection"
-    if git rev-parse --git-dir >/dev/null 2>&1
-        echo "  ✓ Currently in a git repository"
-    else
-        echo "  ✓ Not in git repository (expected in test context)"
+    function __worktree_log_info
+        logger -t "$SCRIPT_NAME[$fish_pid]" -p user.info $argv
     end
 
-    # Test 2: Verify branch detection logic
-    echo "Test 2: Branch existence checking"
-    set test_branch "main"
-    if git show-ref --verify --quiet "refs/heads/$test_branch"
-        echo "  ✓ Can detect local branch '$test_branch'"
-    else if git show-ref --verify --quiet "refs/remotes/origin/$test_branch"
-        echo "  ✓ Can detect remote branch '$test_branch'"
-    else
-        echo "  ✓ Branch detection logic works"
+    function __worktree_log_error
+        logger -t "$SCRIPT_NAME[$fish_pid]" -p user.error $argv
     end
 
-    # Test 3: Verify argument parsing
-    echo "Test 3: Argument parsing simulation"
-    echo "  ✓ Script would accept branch name argument"
-    echo "  ✓ Script would accept --tmp/-t flag"
+    function __worktree_log_debug
+        logger -t "$SCRIPT_NAME[$fish_pid]" -p user.debug $argv
+    end
 
-    echo ""
-    echo "All tests passed!"
-    log_info "action=test status=complete"
-    exit 0
-end
+    function __worktree_show_version
+        echo "worktree version 1.1.0"
+        return 0
+    end
 
-function usage
-    echo "Usage: $SCRIPT_NAME [options] <branch-name>"
-    echo ""
-    echo "Description: Create a git worktree in a standardized location"
-    echo ""
-    echo "Arguments:"
-    echo "  <branch-name>    Name of the branch for the worktree"
-    echo ""
-    echo "Options:"
-    echo "  -t, --tmp        Place worktree in /tmp instead of parent directory"
-    echo "  -h, --help       Show this help message"
-    echo "  -v, --version    Show version information"
-    echo "  --test           Run unit and regression tests"
-    echo ""
-    echo "Examples:"
-    echo "  $SCRIPT_NAME feature-auth    # Creates ../myrepo-feature-auth"
-    echo "  $SCRIPT_NAME -t bugfix-123   # Creates /tmp/myrepo-bugfix-123"
-    exit 0
-end
+    function __worktree_run_tests
+        __worktree_log_info "action=test status=starting"
 
-function main
-    set branch_name $argv[1]
-    set use_tmp $argv[2]
+        echo "Running unit tests for worktree script..."
+        echo ""
 
-    log_info "action=start branch=\"$branch_name\" use_tmp=\"$use_tmp\""
+        # Test 1: Verify we can detect git repository
+        echo "Test 1: Git repository detection"
+        if git rev-parse --git-dir >/dev/null 2>&1
+            echo "  ✓ Currently in a git repository"
+        else
+            echo "  ✓ Not in git repository (expected in test context)"
+        end
+
+        # Test 2: Verify branch detection logic
+        echo "Test 2: Branch existence checking"
+        set -l test_branch "main"
+        if git show-ref --verify --quiet "refs/heads/$test_branch"
+            echo "  ✓ Can detect local branch '$test_branch'"
+        else if git show-ref --verify --quiet "refs/remotes/origin/$test_branch"
+            echo "  ✓ Can detect remote branch '$test_branch'"
+        else
+            echo "  ✓ Branch detection logic works"
+        end
+
+        # Test 3: Verify argument parsing
+        echo "Test 3: Argument parsing simulation"
+        echo "  ✓ Script would accept branch name argument"
+        echo "  ✓ Script would accept --tmp/-t flag"
+
+        echo ""
+        echo "All tests passed!"
+        __worktree_log_info "action=test status=complete"
+        return 0
+    end
+
+    function __worktree_usage
+        echo "Usage: worktree [options] <branch-name>"
+        echo ""
+        echo "Description: Create a git worktree in a standardized location and cd to it"
+        echo ""
+        echo "Arguments:"
+        echo "  <branch-name>    Name of the branch for the worktree"
+        echo ""
+        echo "Options:"
+        echo "  -t, --tmp        Place worktree in /tmp instead of parent directory"
+        echo "  -h, --help       Show this help message"
+        echo "  -v, --version    Show version information"
+        echo "  --test           Run unit and regression tests"
+        echo ""
+        echo "Examples:"
+        echo "  worktree feature-auth    # Creates ../myrepo-feature-auth and cd to it"
+        echo "  worktree -t bugfix-123   # Creates /tmp/myrepo-bugfix-123 and cd to it"
+        echo ""
+        echo "Note: To enable directory changing, install to ~/.config/fish/functions/"
+        return 0
+    end
+
+    # Parse arguments
+    argparse 'h/help' 'v/version' 't/tmp' 'test' -- $argv
+    or begin
+        __worktree_usage
+        return 1
+    end
+
+    if set -q _flag_help
+        __worktree_usage
+        return
+    end
+
+    if set -q _flag_version
+        __worktree_show_version
+        return
+    end
+
+    if set -q _flag_test
+        __worktree_run_tests
+        return
+    end
+
+    # Validate branch name argument
+    if test (count $argv) -lt 1
+        echo "Error: Branch name is required" >&2
+        echo ""
+        __worktree_usage
+        return 1
+    end
+
+    set -l branch_name $argv[1]
+    set -l use_tmp "false"
+
+    if set -q _flag_tmp
+        set use_tmp "true"
+    end
+
+    __worktree_log_debug "action=init branch=\"$branch_name\" tmp=\"$use_tmp\""
 
     # Check if we're in a git repository
     if not git rev-parse --git-dir >/dev/null 2>&1
         echo "Error: Not in a git repository" >&2
-        log_error "action=fail error=\"not in git repository\""
-        exit 1
+        __worktree_log_error "action=fail error=\"not in git repository\""
+        return 1
     end
 
     # Get repository name from the current directory
-    set repo_name (basename (git rev-parse --show-toplevel))
-    log_debug "action=detect repo=\"$repo_name\""
+    set -l repo_name (basename (git rev-parse --show-toplevel))
+    __worktree_log_debug "action=detect repo=\"$repo_name\""
 
     # Determine target directory
+    set -l target_dir
     if test "$use_tmp" = "true"
         set target_dir "/tmp/$repo_name-$branch_name"
     else
         set target_dir (git rev-parse --show-toplevel)/../$repo_name-$branch_name
     end
 
-    log_debug "action=path target=\"$target_dir\""
+    __worktree_log_debug "action=path target=\"$target_dir\""
 
     # Check if branch exists (locally or remotely)
-    set branch_exists false
-    set branch_location ""
+    set -l branch_exists false
+    set -l branch_location ""
 
     if git show-ref --verify --quiet "refs/heads/$branch_name"
         set branch_exists true
@@ -122,60 +159,28 @@ function main
     # Warn if branch exists, but proceed anyway
     if test "$branch_exists" = "true"
         echo "Warning: Branch '$branch_name' already exists ($branch_location)" >&2
-        log_info "action=branch_exists branch=\"$branch_name\" location=\"$branch_location\""
+        __worktree_log_info "action=branch_exists branch=\"$branch_name\" location=\"$branch_location\""
     end
 
     # Create the worktree
+    __worktree_log_info "action=start branch=\"$branch_name\" use_tmp=\"$use_tmp\""
+
     if test "$branch_exists" = "true"
         # Branch exists, check it out
-        log_info "action=create_worktree mode=checkout branch=\"$branch_name\""
+        __worktree_log_info "action=create_worktree mode=checkout branch=\"$branch_name\""
         git worktree add "$target_dir" "$branch_name"
     else
         # Branch doesn't exist, create it
-        log_info "action=create_worktree mode=new_branch branch=\"$branch_name\""
+        __worktree_log_info "action=create_worktree mode=new_branch branch=\"$branch_name\""
         git worktree add -b "$branch_name" "$target_dir"
     end
 
     if test $status -eq 0
         echo "Worktree created at: $target_dir"
-        log_info "action=complete status=success path=\"$target_dir\""
+        cd "$target_dir"
+        __worktree_log_info "action=complete status=success path=\"$target_dir\""
     else
-        log_error "action=fail error=\"git worktree command failed\""
-        exit 1
+        __worktree_log_error "action=fail error=\"git worktree command failed\""
+        return 1
     end
 end
-
-# Parse arguments
-argparse 'h/help' 'v/version' 't/tmp' 'test' -- $argv
-or begin
-    usage
-end
-
-if set -q _flag_help
-    usage
-end
-
-if set -q _flag_version
-    show_version
-end
-
-if set -q _flag_test
-    run_tests
-end
-
-# Validate branch name argument
-if test (count $argv) -lt 1
-    echo "Error: Branch name is required" >&2
-    echo ""
-    usage
-end
-
-set branch_name $argv[1]
-set use_tmp "false"
-
-if set -q _flag_tmp
-    set use_tmp "true"
-end
-
-log_debug "action=init branch=\"$branch_name\" tmp=\"$use_tmp\""
-main $branch_name $use_tmp
