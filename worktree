@@ -1,12 +1,12 @@
 #!/usr/bin/env fish
 
 # Script: worktree
-# Version: 1.2.1
+# Version: 1.2.2
 # Description: Create git worktrees with automatic directory naming and cd to it
 # Installation: Copy to ~/.config/fish/functions/worktree.fish (to enable cd) or ~/bin/scripts
 
 function worktree
-    set -g VERSION "1.2.1"
+    set -g VERSION "1.2.2"
     set -g SCRIPT_NAME "worktree"
 
     function __worktree_log_info
@@ -321,7 +321,7 @@ function worktree
         set -l worktree_branch_name "$worktree_branch"
 
         # cd to main repo
-        echo "Changing to main repository: $main_repo_path"
+        __worktree_log_info "action=cd_to_main_repo path=\"$main_repo_path\""
         cd "$main_repo_path"
         or begin
             echo "Error: Failed to change to main repository" >&2
@@ -329,8 +329,13 @@ function worktree
             return 1
         end
 
+        # Note: We use trash + prune instead of `git worktree remove` for recoverability.
+        # `git worktree remove` permanently deletes the directory, whereas moving to trash
+        # allows recovery if needed. Then `git worktree prune` cleans up the git reference
+        # to the now-missing worktree directory.
+
         # Move to trash first (before git removes it)
-        echo "Moving worktree directory to trash..."
+        __worktree_log_info "action=move_to_trash path=\"$worktree_to_remove\""
         __worktree_move_to_trash "$worktree_to_remove"
         or begin
             echo "Error: Failed to move directory to trash" >&2
@@ -340,7 +345,7 @@ function worktree
         end
 
         # Remove worktree from git (prune the reference)
-        echo "Removing worktree from git..."
+        __worktree_log_info "action=prune_worktree"
         git worktree prune
         or begin
             echo "Error: Failed to prune worktree from git" >&2
@@ -349,7 +354,7 @@ function worktree
         end
 
         # Clean up branches (delete if merged)
-        echo "Checking branch merge status..."
+        __worktree_log_info "action=cleanup_branches branch=\"$worktree_branch_name\""
         __worktree_cleanup_branches "$worktree_branch_name"
 
         echo "Worktree closed successfully!"
