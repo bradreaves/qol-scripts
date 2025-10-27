@@ -1,13 +1,13 @@
 #!/usr/bin/env fish
 
 # Script: worktree
-# Version: 1.2.0
+# Version: 1.2.1
 # Description: Create git worktrees with automatic directory naming and cd to it
 # Installation: Copy to ~/.config/fish/functions/worktree.fish (to enable cd) or ~/bin/scripts
 
 function worktree
-    set -l VERSION "1.2.0"
-    set -l SCRIPT_NAME "worktree"
+    set -g VERSION "1.2.1"
+    set -g SCRIPT_NAME "worktree"
 
     function __worktree_log_info
         logger -t "$SCRIPT_NAME[$fish_pid]" -p user.info $argv
@@ -22,7 +22,7 @@ function worktree
     end
 
     function __worktree_show_version
-        echo "worktree version 1.2.0"
+        echo "worktree version $VERSION"
         return 0
     end
 
@@ -62,6 +62,20 @@ function worktree
         return 0
     end
 
+    function __worktree_get_main_branch
+        # Returns the name of the main branch (main or master)
+        # Outputs branch name to stdout, returns 0 on success, 1 on failure
+        if git show-ref --verify --quiet "refs/heads/main"
+            echo "main"
+            return 0
+        else if git show-ref --verify --quiet "refs/heads/master"
+            echo "master"
+            return 0
+        else
+            return 1
+        end
+    end
+
     function __worktree_detect_if_in_worktree
         # Returns 0 if we're in a worktree, 1 if not
         # Sets global variables: worktree_path, worktree_branch, main_repo_path
@@ -93,13 +107,9 @@ function worktree
             return 1
         end
 
-        # Get the main branch name (try 'main' first, then 'master')
-        set -l main_branch ""
-        if git show-ref --verify --quiet "refs/heads/main"
-            set main_branch "main"
-        else if git show-ref --verify --quiet "refs/heads/master"
-            set main_branch "master"
-        else
+        # Get the main branch name
+        set -l main_branch (__worktree_get_main_branch)
+        if test $status -ne 0
             echo "Error: Cannot find main/master branch" >&2
             return 1
         end
@@ -173,11 +183,7 @@ function worktree
         set -l main_branch $argv[2]
 
         # Check if branch is merged into main using git merge-base
-        if git merge-base --is-ancestor "$branch_name" "$main_branch" 2>/dev/null
-            return 0
-        else
-            return 1
-        end
+        git merge-base --is-ancestor "$branch_name" "$main_branch" 2>/dev/null
     end
 
     function __worktree_is_remote_branch_merged
@@ -190,23 +196,15 @@ function worktree
         end
 
         # Check if remote branch is merged into origin/main
-        if git merge-base --is-ancestor "origin/$branch_name" "origin/$main_branch" 2>/dev/null
-            return 0
-        else
-            return 1
-        end
+        git merge-base --is-ancestor "origin/$branch_name" "origin/$main_branch" 2>/dev/null
     end
 
     function __worktree_cleanup_branches
         set -l branch_name $argv[1]
 
-        # Get the main branch name (try 'main' first, then 'master')
-        set -l main_branch ""
-        if git show-ref --verify --quiet "refs/heads/main"
-            set main_branch "main"
-        else if git show-ref --verify --quiet "refs/heads/master"
-            set main_branch "master"
-        else
+        # Get the main branch name
+        set -l main_branch (__worktree_get_main_branch)
+        if test $status -ne 0
             echo "Warning: Cannot find main/master branch, skipping branch cleanup" >&2
             return 0
         end
@@ -331,20 +329,7 @@ function worktree
             return 1
         end
 
-        # Remove worktree from git
-        echo "Removing worktree from git..."
-        git worktree remove "$worktree_to_remove"
-        or begin
-            echo "Error: Failed to remove worktree from git" >&2
-            __worktree_log_error "action=close error=\"git worktree remove failed\""
-            return 1
-        end
-
-        # Clean up branches (delete if merged)
-        echo "Checking branch merge status..."
-        __worktree_cleanup_branches "$worktree_branch_name"
-
-        # Move to trash
+        # Move to trash first (before git removes it)
         echo "Moving worktree directory to trash..."
         __worktree_move_to_trash "$worktree_to_remove"
         or begin
@@ -353,6 +338,19 @@ function worktree
             __worktree_log_error "action=close error=\"move to trash failed\""
             return 1
         end
+
+        # Remove worktree from git (prune the reference)
+        echo "Removing worktree from git..."
+        git worktree prune
+        or begin
+            echo "Error: Failed to prune worktree from git" >&2
+            __worktree_log_error "action=close error=\"git worktree prune failed\""
+            return 1
+        end
+
+        # Clean up branches (delete if merged)
+        echo "Checking branch merge status..."
+        __worktree_cleanup_branches "$worktree_branch_name"
 
         echo "Worktree closed successfully!"
         __worktree_log_info "action=close status=success branch=\"$worktree_branch_name\""
@@ -368,13 +366,8 @@ function worktree
     end
 
     set -l branch_name $argv[1]
-    set -l use_tmp "false"
 
-    if set -q _flag_tmp
-        set use_tmp "true"
-    end
-
-    __worktree_log_debug "action=init branch=\"$branch_name\" tmp=\"$use_tmp\""
+    __worktree_log_debug "action=init branch=\"$branch_name\" tmp=\""(set -q _flag_tmp; and echo "true"; or echo "false")"\""
 
     # Check if we're in a git repository
     if not git rev-parse --git-dir >/dev/null 2>&1
@@ -389,7 +382,7 @@ function worktree
 
     # Determine target directory
     set -l target_dir
-    if test "$use_tmp" = "true"
+    if set -q _flag_tmp
         set target_dir "/tmp/$repo_name-$branch_name"
     else
         set target_dir (git rev-parse --show-toplevel)/../$repo_name-$branch_name
@@ -398,27 +391,24 @@ function worktree
     __worktree_log_debug "action=path target=\"$target_dir\""
 
     # Check if branch exists (locally or remotely)
-    set -l branch_exists false
     set -l branch_location ""
 
     if git show-ref --verify --quiet "refs/heads/$branch_name"
-        set branch_exists true
         set branch_location "local"
     else if git show-ref --verify --quiet "refs/remotes/origin/$branch_name"
-        set branch_exists true
         set branch_location "remote"
     end
 
     # Warn if branch exists, but proceed anyway
-    if test "$branch_exists" = "true"
+    if test -n "$branch_location"
         echo "Warning: Branch '$branch_name' already exists ($branch_location)" >&2
         __worktree_log_info "action=branch_exists branch=\"$branch_name\" location=\"$branch_location\""
     end
 
     # Create the worktree
-    __worktree_log_info "action=start branch=\"$branch_name\" use_tmp=\"$use_tmp\""
+    __worktree_log_info "action=start branch=\"$branch_name\" use_tmp=\""(set -q _flag_tmp; and echo "true"; or echo "false")"\""
 
-    if test "$branch_exists" = "true"
+    if test -n "$branch_location"
         # Branch exists, check it out
         __worktree_log_info "action=create_worktree mode=checkout branch=\"$branch_name\""
         git worktree add "$target_dir" "$branch_name"
