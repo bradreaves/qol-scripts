@@ -1,0 +1,29 @@
+#!/usr/bin/env fish
+
+# Post-commit hook: Copy scripts to fish functions when committing to main
+
+set current_branch (git branch --show-current)
+
+if test "$current_branch" = "main"
+    echo "Installing fish functions..."
+    
+    # Ensure fish functions directory exists
+    mkdir -p ~/.config/fish/functions
+    
+    # Copy scripts to fish functions
+    cp worktree ~/.config/fish/functions/worktree.fish
+    and echo "  ✓ Installed worktree.fish"
+    or echo "  ✗ Failed to install worktree.fish"
+    
+    if test -f mkcd
+        cp mkcd ~/.config/fish/functions/mkcd.fish
+        and echo "  ✓ Installed mkcd.fish"
+        or echo "  ✗ Failed to install mkcd.fish"
+    end
+    
+    if test -f aicommit
+        cp aicommit ~/.config/fish/functions/aicommit.fish
+        and echo "  ✓ Installed aicommit.fish"
+        or echo "  ✗ Failed to install aicommit.fish"
+    end
+end
