@@ -1,12 +1,12 @@
 #!/usr/bin/env fish
 
 # Script: worktree
-# Version: 1.2.3
+# Version: 1.2.4
 # Description: Create git worktrees with automatic directory naming and cd to it
 # Installation: Copy to ~/.config/fish/functions/worktree.fish (to enable cd) or ~/bin/scripts
 
 function worktree
-    set -g VERSION "1.2.3"
+    set -g VERSION "1.2.4"
     set -g SCRIPT_NAME "worktree"
 
     function __worktree_log_info
@@ -320,12 +320,13 @@ function worktree
         set -l worktree_to_remove "$worktree_path"
         set -l worktree_branch_name "$worktree_branch"
 
-        # cd to main repo
-        __worktree_log_info "action=cd_to_main_repo path=\"$main_repo_path\""
-        cd "$main_repo_path"
+        # cd to parent directory (can't delete a directory we're in)
+        set -l parent_dir (dirname "$worktree_to_remove")
+        __worktree_log_info "action=cd_to_parent path=\"$parent_dir\""
+        cd "$parent_dir"
         or begin
-            echo "Error: Failed to change to main repository" >&2
-            __worktree_log_error "action=close error=\"cd to main repo failed\""
+            echo "Error: Failed to change to parent directory" >&2
+            __worktree_log_error "action=close error=\"cd to parent failed\""
             return 1
         end
 
@@ -341,16 +342,23 @@ function worktree
             echo "Error: Failed to move directory to trash" >&2
             echo "You may need to manually remove: $worktree_to_remove"
             __worktree_log_error "action=close error=\"move to trash failed\""
+            # Trash failed - go back to worktree so user can investigate
+            cd "$worktree_to_remove"
             return 1
         end
 
+        # Worktree is now trashed - cd to main repo
+        __worktree_log_info "action=cd_to_main_repo path=\"$main_repo_path\""
+        cd "$main_repo_path"
+
         # Remove worktree from git (prune the reference)
+        # This is unlikely to fail since we just trashed the directory
         __worktree_log_info "action=prune_worktree"
         git worktree prune
         or begin
-            echo "Error: Failed to prune worktree from git" >&2
+            echo "Warning: Failed to prune worktree from git" >&2
             __worktree_log_error "action=close error=\"git worktree prune failed\""
-            return 1
+            # Continue anyway - the important part (trash) succeeded
         end
 
         # Clean up branches (delete if merged)
