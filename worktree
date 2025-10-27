@@ -1,12 +1,12 @@
 #!/usr/bin/env fish
 
 # Script: worktree
-# Version: 1.2.2
+# Version: 1.2.3
 # Description: Create git worktrees with automatic directory naming and cd to it
 # Installation: Copy to ~/.config/fish/functions/worktree.fish (to enable cd) or ~/bin/scripts
 
 function worktree
-    set -g VERSION "1.2.2"
+    set -g VERSION "1.2.3"
     set -g SCRIPT_NAME "worktree"
 
     function __worktree_log_info
@@ -362,12 +362,31 @@ function worktree
         return 0
     end
 
-    # Validate branch name argument
+    # Show status if no arguments provided
     if test (count $argv) -lt 1
-        echo "Error: Branch name is required" >&2
-        echo ""
-        __worktree_usage
-        return 1
+        # Check if we're in a git repository
+        if not git rev-parse --git-dir >/dev/null 2>&1
+            echo "Error: Not in a git repository" >&2
+            return 1
+        end
+
+        # Check if we're in a worktree
+        if __worktree_detect_if_in_worktree
+            # We're in a worktree
+            echo "Currently in worktree:"
+            echo "  Branch: $worktree_branch"
+            echo "  Path: $worktree_path"
+            echo ""
+            echo "Main repository:"
+            echo "  Path: $main_repo_path"
+        else
+            # We're in the main repository
+            echo "Worktrees for this repository:"
+            echo ""
+            git worktree list
+        end
+
+        return 0
     end
 
     set -l branch_name $argv[1]
