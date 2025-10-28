@@ -6,30 +6,57 @@
 echo "Installing fish shell scripts..."
 echo ""
 
-# Ensure fish functions directory exists
+# Ensure directories exist
 mkdir -p ~/.config/fish/functions
+mkdir -p ~/.config/fish/completions
 
-# Copy scripts to fish functions
+# Install fish functions (scripts that need to modify shell state)
 echo "Installing functions to ~/.config/fish/functions/..."
 
-if test -f worktree
-    cp worktree ~/.config/fish/functions/worktree.fish
-    and echo "  ✓ Installed worktree.fish"
-    or echo "  ✗ Failed to install worktree.fish"
-else
-    echo "  ✗ worktree script not found"
+for script in worktree mkcd
+    if test -f $script
+        # Install function
+        cp $script ~/.config/fish/functions/$script.fish
+        and echo "  ✓ Installed $script.fish"
+        or echo "  ✗ Failed to install $script.fish"
+
+        # Install completions
+        set completions_file ~/.config/fish/completions/$script.fish
+        if test -f "$completions_file"
+            rm "$completions_file"
+        end
+
+        fish $script --fish-completions >/dev/null 2>&1
+        and echo "  ✓ Installed completions for $script"
+        or echo "  ℹ No completions for $script"
+    else
+        echo "  ✗ $script script not found"
+    end
 end
 
-if test -f mkcd
-    cp mkcd ~/.config/fish/functions/mkcd.fish
-    and echo "  ✓ Installed mkcd.fish"
-    or echo "  ✗ Failed to install mkcd.fish"
-end
+echo ""
+echo "Installing standalone executables..."
 
-if test -f aicommit
-    cp aicommit ~/.config/fish/functions/aicommit.fish
-    and echo "  ✓ Installed aicommit.fish"
-    or echo "  ✗ Failed to install aicommit.fish"
+# Install standalone scripts (don't need to modify shell state)
+for script in aicommit
+    if test -f $script
+        # Make executable
+        chmod +x $script
+        and echo "  ✓ $script is executable"
+        or echo "  ✗ Failed to make $script executable"
+
+        # Install completions
+        set completions_file ~/.config/fish/completions/$script.fish
+        if test -f "$completions_file"
+            rm "$completions_file"
+        end
+
+        ./$script --fish-completions >/dev/null 2>&1
+        and echo "  ✓ Installed completions for $script"
+        or echo "  ℹ No completions for $script"
+    else
+        echo "  ✗ $script script not found"
+    end
 end
 
 echo ""

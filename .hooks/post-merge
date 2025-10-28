@@ -1,29 +1,40 @@
 #!/usr/bin/env fish
 
-# Post-merge hook: Copy scripts to fish functions when merging into main
+# Post-merge hook: Copy scripts to fish functions and reinstall completions when merging into main
 
 set current_branch (git branch --show-current)
 
 if test "$current_branch" = "main"
     echo "Installing fish functions..."
-    
-    # Ensure fish functions directory exists
+
+    # Ensure directories exist
     mkdir -p ~/.config/fish/functions
-    
-    # Copy scripts to fish functions
-    cp worktree ~/.config/fish/functions/worktree.fish
-    and echo "  ✓ Installed worktree.fish"
-    or echo "  ✗ Failed to install worktree.fish"
-    
-    if test -f mkcd
-        cp mkcd ~/.config/fish/functions/mkcd.fish
-        and echo "  ✓ Installed mkcd.fish"
-        or echo "  ✗ Failed to install mkcd.fish"
-    end
-    
-    if test -f aicommit
-        cp aicommit ~/.config/fish/functions/aicommit.fish
-        and echo "  ✓ Installed aicommit.fish"
-        or echo "  ✗ Failed to install aicommit.fish"
+    mkdir -p ~/.config/fish/completions
+
+    # Get list of changed files in the merge
+    set changed_files (git diff-tree --no-commit-id --name-only -r ORIG_HEAD HEAD)
+
+    # Copy scripts to fish functions and reinstall completions if they changed
+    for script in worktree mkcd
+        if test -f $script
+            # Copy to functions
+            cp $script ~/.config/fish/functions/$script.fish
+            and echo "  ✓ Installed $script.fish"
+            or echo "  ✗ Failed to install $script.fish"
+
+            # Reinstall completions if the script was modified
+            if contains $script $changed_files
+                # Remove old completions
+                set completions_file ~/.config/fish/completions/$script.fish
+                if test -f "$completions_file"
+                    rm "$completions_file"
+                end
+
+                # Install new completions
+                fish $script --fish-completions >/dev/null 2>&1
+                and echo "  ✓ Reinstalled completions for $script"
+                or echo "  ℹ No completions for $script"
+            end
+        end
     end
 end

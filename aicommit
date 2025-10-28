@@ -6,7 +6,7 @@
 # Installation: Copy to ~/bin/scripts
 
 set VERSION "1.3.0"
-set SCRIPT_NAME (basename (status filename))
+set SCRIPT_NAME "aicommit"
 
 # Prompt for Claude Code to generate commit message
 set COMMIT_PROMPT "Analyze this git diff and generate a concise, professional commit message following conventional commit format. The message should have a short summary line (max 50 chars) and optionally a detailed body explaining the changes. Only output the commit message text, nothing else."

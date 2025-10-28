@@ -4,19 +4,23 @@ A collection of useful Fish shell scripts for development workflows.
 
 ## Installation
 
-After cloning this repository, run the installation script to set up the scripts as Fish functions and install git hooks:
+After cloning this repository, run the installation script to set up the scripts:
 
 ```bash
 fish .install.fish
 ```
 
 This will:
-- Copy all scripts to `~/.config/fish/functions/` (so they work like native Fish commands)
-- Install git hooks that automatically update your Fish functions when you commit or merge to `main`
+- Install **worktree** and **mkcd** as Fish functions in `~/.config/fish/functions/` (required because they use `cd` to change directories)
+- Make **aicommit** executable (runs as a standalone script - doesn't need to be a function)
+- Install fish shell completions for all scripts
+- Install git hooks that automatically update Fish functions when you commit or merge to `main`
+
+**Note:** Ensure `~/bin/scripts` is in your PATH for standalone executables like `aicommit` to work.
 
 ## Scripts
 
-### worktree
+### worktree (Fish Function)
 
 Create and manage git worktrees with automatic directory naming.
 
@@ -48,7 +52,7 @@ worktree --help
 worktree --version
 ```
 
-### mkcd
+### mkcd (Fish Function)
 
 Create a directory and cd into it in one command.
 
@@ -57,9 +61,9 @@ Create a directory and cd into it in one command.
 mkcd new-directory
 ```
 
-### aicommit
+### aicommit (Standalone Executable)
 
-AI-powered git commit message generator (if available).
+Generate AI-powered git commit messages using Claude Code.
 
 **Usage:**
 ```fish
@@ -70,14 +74,14 @@ aicommit
 
 The repository includes git hooks that automatically keep your Fish functions in sync:
 
-- **post-commit**: Updates Fish functions after committing to `main`
-- **post-merge**: Updates Fish functions after merging into `main`
+- **post-commit**: Updates Fish functions (worktree, mkcd) and their completions after committing to `main`
+- **post-merge**: Updates Fish functions (worktree, mkcd) and their completions after merging into `main`
 
 These hooks are automatically installed when you run `.install.fish`.
 
 ## Development
 
-To manually update your Fish functions after making changes:
+To manually update your Fish functions and completions after making changes:
 
 ```fish
 fish .install.fish
