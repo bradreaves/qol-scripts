@@ -1,11 +1,11 @@
 #!/usr/bin/env fish
 
 # Script: aicommit
-# Version: 1.3.0
+# Version: 1.3.1
 # Description: Generate AI-powered commit messages using Claude Code (haiku model)
 # Installation: Copy to ~/bin/scripts
 
-set VERSION "1.3.0"
+set VERSION "1.3.1"
 set SCRIPT_NAME "aicommit"
 
 # Prompt for Claude Code to generate commit message
@@ -262,9 +262,13 @@ function main
     set temp_msg (mktemp)
     log_debug "action=create_temp file=\"$temp_msg\""
 
+    # Detect Claude Code command with fallback to local installation
+    set claude_cmd (which claude 2>/dev/null || echo ~/.claude/local/claude)
+    log_debug "action=detect_claude cmd=\"$claude_cmd\""
+
     # Generate commit message using Claude Code with haiku model
     # We'll ask Claude to analyze the staged diff and create a commit message
-    git diff --cached | ~/.claude/local/claude --print --dangerously-skip-permissions --model haiku "$COMMIT_PROMPT" >$temp_msg 2>&1
+    git diff --cached | $claude_cmd --print --dangerously-skip-permissions --model haiku "$COMMIT_PROMPT" >$temp_msg 2>&1
 
     if test $status -ne 0
         log_error "action=fail error=\"claude-code failed\""
