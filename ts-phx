@@ -1,14 +1,16 @@
 #!/usr/bin/env fish
 
 # Script: ts-phx
-# Version: 1.0.0
+# Version: 2.0.0
 # Description: Launch Phoenix server with Tailscale serve in a tmux TUI
 # Installation: Copy to ~/bin/scripts
 
-set VERSION "1.0.0"
+set VERSION "2.0.0"
 set SCRIPT_NAME (basename (status filename))
+set SCRIPT_PATH (realpath (status filename))
 set SESSION_NAME "ts-phx"
-set TEMP_DIR "/tmp/$SCRIPT_NAME-$fish_pid"
+set LOCK_FILE "/tmp/$SCRIPT_NAME.lock"
+set TEMP_DIR "/tmp/$SCRIPT_NAME"
 set STATE_FILE "$TEMP_DIR/state"
 
 function log_info
@@ -35,7 +37,7 @@ function run_tests
     # Test port detection
     echo "Testing port detection..."
     set test_port (find_unused_port)
-    if test -n "$test_port" -a "$test_port" -gt 1024
+    if test -n "$test_port" -a "$test_port" -ge 10000 -a "$test_port" -le 49151
         echo "✓ Port detection works: $test_port"
     else
         echo "✗ Port detection failed"
@@ -44,13 +46,23 @@ function run_tests
 
     # Test dependency checks
     echo "Testing dependency checks..."
-    for cmd in mix tailscale tmux curl
+    for cmd in mix tailscale tmux curl nc
         if not command -v $cmd >/dev/null 2>&1
             echo "✗ Missing dependency: $cmd"
             exit 1
         end
     end
     echo "✓ All dependencies present"
+
+    # Test lock file mechanism
+    echo "Testing lock file mechanism..."
+    if create_lock_file test 12345
+        echo "✓ Lock file creation works"
+        rm -f "$LOCK_FILE"
+    else
+        echo "✗ Lock file creation failed"
+        exit 1
+    end
 
     echo "All tests passed!"
     log_info "action=test status=complete"
@@ -75,6 +87,9 @@ complete -c $SCRIPT_NAME -s h -l help -d 'Show help message'
 complete -c $SCRIPT_NAME -s v -l version -d 'Show version information'
 complete -c $SCRIPT_NAME -l test -d 'Run unit and regression tests'
 complete -c $SCRIPT_NAME -l fish-completions -d 'Install fish shell completions'
+complete -c $SCRIPT_NAME -l dry-run -d 'Test TUI without starting servers'
+complete -c $SCRIPT_NAME -l kill -d 'Kill running instance'
+complete -c $SCRIPT_NAME -l port -d 'Specify preferred port' -x
 " > "$completions_file"
 
     and begin
@@ -98,25 +113,29 @@ function usage
     echo "Description: Launch Phoenix server with Tailscale serve in a tmux TUI"
     echo ""
     echo "Features:"
-    echo "  - Automatically finds an unused port > 1024"
+    echo "  - Automatically finds an unused port in range 10000-49151"
     echo "  - Starts Phoenix server on that port"
     echo "  - Exposes server via Tailscale serve (auto-detect HTTPS/HTTP)"
     echo "  - Provides interactive tmux TUI with status and logs"
     echo "  - Press '/' for command menu overlay"
+    echo "  - Enforces single instance (use --kill to stop running instance)"
     echo ""
     echo "Options:"
     echo "  -h, --help            Show this help message"
     echo "  -v, --version         Show version information"
     echo "  --test                Run unit and regression tests"
     echo "  --fish-completions    Install fish shell completions"
+    echo "  --dry-run             Test TUI without starting servers"
+    echo "  --kill                Kill running instance"
+    echo "  --port PORT           Use specific port (10000-49151)"
     exit 0
 end
 
 function find_unused_port
-    # Find an unused TCP port > 1024
+    # Find an unused TCP port in registered port range (10000-49151)
     set -l port
     for i in (seq 1 100)
-        set port (shuf -i 1025-65535 -n 1 2>/dev/null; or jot -r 1 1025 65535)
+        set port (math (random) % 39151 + 10000)
         if not nc -z localhost $port 2>/dev/null
             echo $port
             return 0
@@ -126,10 +145,48 @@ function find_unused_port
     return 1
 end
 
+function check_port_available
+    set -l port $argv[1]
+
+    if not nc -z localhost $port 2>/dev/null
+        return 0
+    else
+        return 1
+    end
+end
+
+function validate_port
+    set -l port $argv[1]
+
+    if test -z "$port"
+        echo "Error: Port number required" >&2
+        return 1
+    end
+
+    if not string match -qr '^\d+$' -- "$port"
+        echo "Error: Port must be a number" >&2
+        return 1
+    end
+
+    if test "$port" -lt 10000 -o "$port" -gt 49151
+        echo "Error: Port must be in range 10000-49151" >&2
+        return 1
+    end
+
+    return 0
+end
+
 function check_dependencies
     set -l missing_deps
+    set -l dry_run $argv[1]
 
-    for cmd in mix tailscale tmux curl nc
+    set -l required_deps tmux
+
+    if test "$dry_run" != "true"
+        set -a required_deps mix tailscale curl nc
+    end
+
+    for cmd in $required_deps
         if not command -v $cmd >/dev/null 2>&1
             set -a missing_deps $cmd
         end
@@ -149,6 +206,81 @@ function check_dependencies
     return 0
 end
 
+function create_lock_file
+    set -l session_name $argv[1]
+    set -l main_pid $argv[2]
+
+    # Check if lock file exists
+    if test -f "$LOCK_FILE"
+        set -l existing_pid (grep "^pid=" "$LOCK_FILE" | cut -d= -f2)
+
+        # Check if process is still running
+        if test -n "$existing_pid"; and kill -0 $existing_pid 2>/dev/null
+            echo "Error: Another instance is already running (PID: $existing_pid)" >&2
+            echo "Use '$SCRIPT_NAME --kill' to stop it first" >&2
+            return 1
+        else
+            # Stale lock file, remove it
+            log_info "action=create_lock status=removing_stale_lock"
+            rm -f "$LOCK_FILE"
+        end
+    end
+
+    # Create lock file
+    echo "pid=$main_pid" > "$LOCK_FILE"
+    echo "session=$session_name" >> "$LOCK_FILE"
+    echo "started=$(date +%s)" >> "$LOCK_FILE"
+
+    log_info "action=create_lock status=success pid=$main_pid"
+    return 0
+end
+
+function remove_lock_file
+    if test -f "$LOCK_FILE"
+        rm -f "$LOCK_FILE"
+        log_info "action=remove_lock status=success"
+    end
+end
+
+function kill_running_instance
+    if not test -f "$LOCK_FILE"
+        echo "No running instance found"
+        exit 0
+    end
+
+    set -l existing_pid (grep "^pid=" "$LOCK_FILE" | cut -d= -f2)
+
+    if test -z "$existing_pid"
+        echo "Error: Invalid lock file" >&2
+        rm -f "$LOCK_FILE"
+        exit 1
+    end
+
+    if not kill -0 $existing_pid 2>/dev/null
+        echo "Instance not running (stale lock file)"
+        rm -f "$LOCK_FILE"
+        exit 0
+    end
+
+    echo "Sending TERM signal to PID $existing_pid..."
+    kill -TERM $existing_pid 2>/dev/null
+
+    # Wait for process to exit
+    for i in (seq 1 10)
+        if not kill -0 $existing_pid 2>/dev/null
+            echo "Instance stopped successfully"
+            rm -f "$LOCK_FILE"
+            exit 0
+        end
+        sleep 1
+    end
+
+    echo "Warning: Process still running, sending KILL signal..."
+    kill -KILL $existing_pid 2>/dev/null
+    rm -f "$LOCK_FILE"
+    exit 0
+end
+
 function cleanup
     log_info "action=cleanup status=starting"
 
@@ -156,6 +288,8 @@ function cleanup
     if test -f "$STATE_FILE"
         set -l phoenix_pid (grep "^phoenix_pid=" "$STATE_FILE" | cut -d= -f2)
         set -l tailscale_pid (grep "^tailscale_pid=" "$STATE_FILE" | cut -d= -f2)
+        set -l updater_pid (grep "^updater_pid=" "$STATE_FILE" | cut -d= -f2)
+        set -l dry_run (grep "^dry_run=" "$STATE_FILE" | cut -d= -f2)
 
         if test -n "$phoenix_pid"
             kill $phoenix_pid 2>/dev/null
@@ -166,16 +300,37 @@ function cleanup
             kill $tailscale_pid 2>/dev/null
             log_debug "action=cleanup target=tailscale pid=$tailscale_pid"
         end
-    end
 
-    # Stop tailscale serve
-    tailscale serve reset 2>/dev/null
+        if test -n "$updater_pid"
+            kill $updater_pid 2>/dev/null
+            log_debug "action=cleanup target=updater pid=$updater_pid"
+        end
+
+        # Only reset tailscale if not in dry-run mode
+        if test "$dry_run" != "true"
+            tailscale serve reset 2>/dev/null
+        end
+    end
 
     # Kill tmux session
     tmux kill-session -t $SESSION_NAME 2>/dev/null
 
+    # Show tmux sessions in dry-run mode
+    if test -f "$STATE_FILE"
+        set -l dry_run (grep "^dry_run=" "$STATE_FILE" | cut -d= -f2)
+        if test "$dry_run" = "true"
+            echo ""
+            echo "=== Tmux Sessions After Cleanup ==="
+            tmux list-sessions 2>/dev/null; or echo "No active tmux sessions"
+            echo ""
+        end
+    end
+
     # Clean up temp files
     rm -rf "$TEMP_DIR"
+
+    # Remove lock file
+    remove_lock_file
 
     log_info "action=cleanup status=complete"
 end
@@ -188,7 +343,7 @@ function save_state
 
     # Update or append the key-value pair
     if test -f "$STATE_FILE"
-        grep -v "^$key=" "$STATE_FILE" > "$STATE_FILE.tmp"
+        grep -v "^$key=" "$STATE_FILE" > "$STATE_FILE.tmp" 2>/dev/null
         mv "$STATE_FILE.tmp" "$STATE_FILE"
     end
 
@@ -218,6 +373,36 @@ function start_phoenix
     echo $phoenix_pid
 end
 
+function start_phoenix_mock
+    set -l port $argv[1]
+
+    log_info "action=start_phoenix_mock port=$port"
+
+    # Create a mock Phoenix log with realistic output
+    fish -c "
+        echo '[info] Running SeetooWeb.Endpoint with Bandit' > $TEMP_DIR/phoenix.log
+        echo '[info] Access SeetooWeb.Endpoint at http://localhost:$port' >> $TEMP_DIR/phoenix.log
+        echo '' >> $TEMP_DIR/phoenix.log
+        while true
+            sleep (math (random) % 5 + 2)
+            set timestamp (date '+%H:%M:%S.%3N')
+            set -l messages \
+                '[info] GET /' \
+                '[info] GET /api/health' \
+                '[debug] Processing LiveView connection' \
+                '[info] Sent 200 in 42ms'
+            set msg \$messages[(math (random) % (count \$messages) + 1)]
+            echo \"[\$timestamp] \$msg\" >> $TEMP_DIR/phoenix.log
+        end
+    " &
+
+    set -l mock_pid $last_pid
+    save_state phoenix_pid $mock_pid
+    save_state port $port
+
+    echo $mock_pid
+end
+
 function start_tailscale_serve
     set -l port $argv[1]
 
@@ -245,7 +430,30 @@ function start_tailscale_serve
     echo $tailscale_pid
 end
 
+function start_tailscale_mock
+    set -l port $argv[1]
+
+    log_info "action=start_tailscale_mock port=$port"
+
+    # Create a mock process that does nothing
+    fish -c "while true; sleep 60; end" &
+    set -l mock_pid $last_pid
+
+    save_state tailscale_pid $mock_pid
+    save_state protocol "https"
+    save_state mock_url "https://mock-device.tailnet-name.ts.net"
+
+    echo $mock_pid
+end
+
 function get_tailscale_url
+    # Check if we're in dry-run mode
+    set -l mock_url (get_state mock_url)
+    if test -n "$mock_url"
+        echo $mock_url
+        return
+    end
+
     # Get the Tailscale URL
     set -l status_output (tailscale serve status 2>/dev/null)
 
@@ -282,24 +490,7 @@ function verify_tailscale
     end
 end
 
-function create_command_menu_pane
-    # Create the bottom command menu pane
-    set -l menu_content "
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                            COMMAND MENU                                      ║
-║                                                                              ║
-║  Press '/' to open command overlay with detailed help                       ║
-║                                                                              ║
-║  Quick Commands:                                                            ║
-║    q - Stop all and exit          r - Restart Phoenix                       ║
-║    t - Toggle Tailscale serve     p - List Tailscale peers                  ║
-║    h - Show help overlay                                                    ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-"
-    echo "$menu_content"
-end
-
-function create_help_overlay
+function get_help_text
     echo "╔══════════════════════════════════════════════════════════════════════════════╗
 ║                      PHOENIX + TAILSCALE SERVE - COMMANDS                    ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -331,7 +522,7 @@ function create_help_overlay
 ║    / - Open Command Menu                                                    ║
 ║        Press '/' at any time to see this help overlay                       ║
 ║                                                                              ║
-║    Esc or Enter - Close Overlay                                             ║
+║    Esc or q - Close Overlay                                                 ║
 ║        Close this help window and return to the log view                    ║
 ║                                                                              ║
 ║    Ctrl+B [ - Scroll Mode                                                   ║
@@ -340,40 +531,69 @@ function create_help_overlay
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  Press any key to close this overlay                                        ║
-╚══════════════════════════════════════════════════════════════════════════════╝" > "$TEMP_DIR/help.txt"
+╚══════════════════════════════════════════════════════════════════════════════╝"
+end
+
+function get_menu_text
+    echo "╔══════════════════════════════════════════════════════════════════════════════╗
+║                            COMMAND MENU                                      ║
+║                                                                              ║
+║  Press '/' or 'h' to open command overlay with detailed help                ║
+║                                                                              ║
+║  Quick Commands:                                                            ║
+║    q - Stop all and exit          r - Restart Phoenix                       ║
+║    s - Stop Tailscale serve       t - Restart Tailscale serve               ║
+║    p - List Tailscale peers       h - Show help overlay                     ║
+╚══════════════════════════════════════════════════════════════════════════════╝"
 end
 
 function setup_tmux_keybindings
     set -l session $argv[1]
 
-    # Create help overlay content
-    create_help_overlay
-
     # Bind '/' to show help overlay
-    tmux bind-key -n '/' display-popup -E -w 80% -h 80% "cat $TEMP_DIR/help.txt; read -n 1"
+    tmux bind-key -T root '/' run-shell "tmux display-popup -E -w 80% -h 80% '$SCRIPT_PATH --internal-show-help'"
+
+    # Bind 'h' to show help overlay
+    tmux bind-key -T root 'h' run-shell "tmux display-popup -E -w 80% -h 80% '$SCRIPT_PATH --internal-show-help'"
 
     # Bind 'q' to stop all and exit
-    tmux bind-key -n 'q' run-shell "fish -c 'fish ~/bin/scripts/$SCRIPT_NAME --internal-stop-all'"
+    tmux bind-key -T root 'q' run-shell "env TEMP_DIR=$TEMP_DIR $SCRIPT_PATH --internal-stop-all"
 
     # Bind 's' to stop tailscale serve
-    tmux bind-key -n 's' run-shell "fish -c 'fish ~/bin/scripts/$SCRIPT_NAME --internal-stop-tailscale'"
+    tmux bind-key -T root 's' run-shell "env TEMP_DIR=$TEMP_DIR $SCRIPT_PATH --internal-stop-tailscale"
 
     # Bind 'r' to restart Phoenix
-    tmux bind-key -n 'r' run-shell "fish -c 'fish ~/bin/scripts/$SCRIPT_NAME --internal-restart-phoenix'"
+    tmux bind-key -T root 'r' run-shell "env TEMP_DIR=$TEMP_DIR $SCRIPT_PATH --internal-restart-phoenix"
 
     # Bind 't' to restart Tailscale
-    tmux bind-key -n 't' run-shell "fish -c 'fish ~/bin/scripts/$SCRIPT_NAME --internal-restart-tailscale'"
+    tmux bind-key -T root 't' run-shell "env TEMP_DIR=$TEMP_DIR $SCRIPT_PATH --internal-restart-tailscale"
 
-    # Bind 'p' to list peers
-    tmux bind-key -n 'p' display-popup -E "tailscale status; echo ''; echo 'Press any key to close...'; read -n 1"
+    # Bind 'p' to list peers (check if dry-run)
+    set -l dry_run (get_state dry_run)
+    if test "$dry_run" = "true"
+        tmux bind-key -T root 'p' display-popup -E "echo 'Tailscale Peers (Mock):'; echo ''; echo 'mock-peer-1    100.64.0.2'; echo 'mock-peer-2    100.64.0.3'; echo ''; echo 'Press any key to close...'; read -n 1"
+    else
+        tmux bind-key -T root 'p' display-popup -E "tailscale status; echo ''; echo 'Press any key to close...'; read -n 1"
+    end
+end
 
-    # Bind 'h' to show help
-    tmux bind-key -n 'h' display-popup -E -w 80% -h 80% "cat $TEMP_DIR/help.txt; read -n 1"
+function internal_show_help
+    get_help_text
+    read -n 1
 end
 
 function internal_stop_all
-    set -l phoenix_pid (get_state phoenix_pid)
-    set -l tailscale_pid (get_state tailscale_pid)
+    # Use TEMP_DIR from environment
+    set -l temp_dir $TEMP_DIR
+    if test -z "$temp_dir"
+        set temp_dir "/tmp/$SCRIPT_NAME"
+    end
+
+    set -l state_file "$temp_dir/state"
+    set -l phoenix_pid (grep "^phoenix_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l tailscale_pid (grep "^tailscale_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l updater_pid (grep "^updater_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l dry_run (grep "^dry_run=" "$state_file" 2>/dev/null | cut -d= -f2)
 
     if test -n "$phoenix_pid"
         kill $phoenix_pid 2>/dev/null
@@ -383,85 +603,167 @@ function internal_stop_all
         kill $tailscale_pid 2>/dev/null
     end
 
-    tailscale serve reset 2>/dev/null
+    if test -n "$updater_pid"
+        kill $updater_pid 2>/dev/null
+    end
+
+    if test "$dry_run" != "true"
+        tailscale serve reset 2>/dev/null
+    end
+
     tmux kill-session -t $SESSION_NAME 2>/dev/null
 
     log_info "action=stop_all status=complete"
 end
 
 function internal_stop_tailscale
-    set -l tailscale_pid (get_state tailscale_pid)
+    # Use TEMP_DIR from environment
+    set -l temp_dir $TEMP_DIR
+    if test -z "$temp_dir"
+        set temp_dir "/tmp/$SCRIPT_NAME"
+    end
+
+    set -l state_file "$temp_dir/state"
+    set -l tailscale_pid (grep "^tailscale_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l dry_run (grep "^dry_run=" "$state_file" 2>/dev/null | cut -d= -f2)
 
     if test -n "$tailscale_pid"
         kill $tailscale_pid 2>/dev/null
     end
 
-    tailscale serve reset 2>/dev/null
+    if test "$dry_run" != "true"
+        tailscale serve reset 2>/dev/null
+    end
 
     tmux display-message "Tailscale serve stopped"
     log_info "action=stop_tailscale status=complete"
 end
 
 function internal_restart_phoenix
-    set -l phoenix_pid (get_state phoenix_pid)
-    set -l port (get_state port)
+    # Use TEMP_DIR from environment
+    set -l temp_dir $TEMP_DIR
+    if test -z "$temp_dir"
+        set temp_dir "/tmp/$SCRIPT_NAME"
+    end
+
+    set -l state_file "$temp_dir/state"
+    set -l phoenix_pid (grep "^phoenix_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l port (grep "^port=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l dry_run (grep "^dry_run=" "$state_file" 2>/dev/null | cut -d= -f2)
 
     if test -n "$phoenix_pid"
         kill $phoenix_pid 2>/dev/null
         sleep 1
     end
 
-    set -l new_pid (start_phoenix $port)
+    # Restart based on mode
+    if test "$dry_run" = "true"
+        # Re-export state location for the mock function
+        set -gx STATE_FILE "$state_file"
+        set -gx TEMP_DIR "$temp_dir"
+        set -l new_pid (start_phoenix_mock $port)
+        tmux display-message "Phoenix restarted (Mock PID: $new_pid)"
+    else
+        set -gx STATE_FILE "$state_file"
+        set -gx TEMP_DIR "$temp_dir"
+        set -l new_pid (start_phoenix $port)
+        tmux display-message "Phoenix restarted (PID: $new_pid)"
+    end
 
-    tmux display-message "Phoenix restarted (PID: $new_pid)"
-    log_info "action=restart_phoenix status=complete pid=$new_pid"
+    log_info "action=restart_phoenix status=complete"
 end
 
 function internal_restart_tailscale
-    set -l tailscale_pid (get_state tailscale_pid)
-    set -l port (get_state port)
+    # Use TEMP_DIR from environment
+    set -l temp_dir $TEMP_DIR
+    if test -z "$temp_dir"
+        set temp_dir "/tmp/$SCRIPT_NAME"
+    end
+
+    set -l state_file "$temp_dir/state"
+    set -l tailscale_pid (grep "^tailscale_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l port (grep "^port=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l dry_run (grep "^dry_run=" "$state_file" 2>/dev/null | cut -d= -f2)
 
     if test -n "$tailscale_pid"
         kill $tailscale_pid 2>/dev/null
     end
 
-    tailscale serve reset 2>/dev/null
+    if test "$dry_run" != "true"
+        tailscale serve reset 2>/dev/null
+    end
+
     sleep 1
 
-    set -l new_pid (start_tailscale_serve $port)
+    # Restart based on mode
+    if test "$dry_run" = "true"
+        set -gx STATE_FILE "$state_file"
+        set -gx TEMP_DIR "$temp_dir"
+        set -l new_pid (start_tailscale_mock $port)
+        tmux display-message "Tailscale serve restarted (Mock PID: $new_pid)"
+    else
+        set -gx STATE_FILE "$state_file"
+        set -gx TEMP_DIR "$temp_dir"
+        set -l new_pid (start_tailscale_serve $port)
+        tmux display-message "Tailscale serve restarted (PID: $new_pid)"
+    end
 
-    tmux display-message "Tailscale serve restarted (PID: $new_pid)"
-    log_info "action=restart_tailscale status=complete pid=$new_pid"
+    log_info "action=restart_tailscale status=complete"
 end
 
-function update_status_bar
-    set -l port (get_state port)
+function internal_update_status
+    # Use TEMP_DIR from environment
+    set -l temp_dir $TEMP_DIR
+    if test -z "$temp_dir"
+        set temp_dir "/tmp/$SCRIPT_NAME"
+    end
+
+    set -l state_file "$temp_dir/state"
+    set -l port (grep "^port=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l phoenix_pid (grep "^phoenix_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l tailscale_pid (grep "^tailscale_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
+    set -l dry_run (grep "^dry_run=" "$state_file" 2>/dev/null | cut -d= -f2)
+
+    # Get URL
+    set -gx STATE_FILE "$state_file"
+    set -gx TEMP_DIR "$temp_dir"
     set -l url (get_tailscale_url)
-    set -l phoenix_pid (get_state phoenix_pid)
-    set -l tailscale_pid (get_state tailscale_pid)
 
     # Check if processes are running
-    set -l phoenix_status "✗"
-    set -l tailscale_status "✗"
+    set -l phoenix_status "Stopped"
+    set -l tailscale_status "Stopped"
 
     if test -n "$phoenix_pid"; and kill -0 $phoenix_pid 2>/dev/null
-        set phoenix_status "✓"
+        set phoenix_status "Running"
     end
 
     if test -n "$tailscale_pid"; and kill -0 $tailscale_pid 2>/dev/null
-        set tailscale_status "✓"
+        set tailscale_status "Running"
     end
 
-    set -l status_text "Phoenix:$phoenix_status Port:$port | Tailscale:$tailscale_status URL:$url | Press '/' for commands"
+    set -l mode_indicator ""
+    if test "$dry_run" = "true"
+        set mode_indicator "[DRY-RUN] "
+    end
+
+    set -l status_text "$mode_indicator Phoenix:$phoenix_status Port:$port | Tailscale:$tailscale_status URL:$url | Press '/' for commands"
 
     tmux set-option -t $SESSION_NAME status-right "$status_text"
 end
 
 function main
-    log_info "action=start status=processing"
+    set -l dry_run $argv[1]
+    set -l preferred_port $argv[2]
+
+    log_info "action=start status=processing dry_run=$dry_run"
 
     # Check dependencies
-    if not check_dependencies
+    if not check_dependencies $dry_run
+        exit 1
+    end
+
+    # Create lock file
+    if not create_lock_file $SESSION_NAME $fish_pid
         exit 1
     end
 
@@ -471,44 +773,74 @@ function main
     # Create temp directory
     mkdir -p "$TEMP_DIR"
 
-    # Find unused port
-    echo "Finding unused port..."
-    set -l port (find_unused_port)
-    if test -z "$port"
-        echo "Error: Could not find an unused port" >&2
-        exit 1
-    end
-    echo "Using port: $port"
+    # Save dry-run mode to state
+    save_state dry_run $dry_run
 
-    # Start Phoenix server
-    echo "Starting Phoenix server on port $port..."
-    set -l phoenix_pid (start_phoenix $port)
-    echo "Phoenix started (PID: $phoenix_pid)"
-
-    # Wait for Phoenix to start
-    echo "Waiting for Phoenix to initialize..."
-    sleep 5
-
-    # Start Tailscale serve
-    echo "Starting Tailscale serve..."
-    set -l tailscale_pid (start_tailscale_serve $port)
-    echo "Tailscale serve started (PID: $tailscale_pid)"
-
-    # Wait for Tailscale to start
-    echo "Waiting for Tailscale to initialize..."
-    sleep 3
-
-    # Get Tailscale URL
-    set -l url (get_tailscale_url)
-    echo "Tailscale URL: $url"
-
-    # Verify Tailscale serve
-    if test "$url" != "No URL yet" -a "$url" != "Unknown"
-        echo "Verifying Tailscale serve..."
-        if verify_tailscale "$url"
-            echo "✓ Tailscale serve is working!"
+    # Find or validate port
+    set -l port
+    if test -n "$preferred_port"
+        echo "Checking preferred port $preferred_port..."
+        if check_port_available $preferred_port
+            set port $preferred_port
+            echo "Using preferred port: $port"
         else
-            echo "⚠ Warning: Could not verify Tailscale serve"
+            echo "Error: Port $preferred_port is already in use" >&2
+            exit 1
+        end
+    else
+        echo "Finding unused port..."
+        set port (find_unused_port)
+        if test -z "$port"
+            echo "Error: Could not find an unused port" >&2
+            exit 1
+        end
+        echo "Using port: $port"
+    end
+
+    # Start services based on mode
+    if test "$dry_run" = "true"
+        echo "Starting mock Phoenix server on port $port..."
+        set -l phoenix_pid (start_phoenix_mock $port)
+        echo "Mock Phoenix started (PID: $phoenix_pid)"
+
+        sleep 2
+
+        echo "Starting mock Tailscale serve..."
+        set -l tailscale_pid (start_tailscale_mock $port)
+        echo "Mock Tailscale serve started (PID: $tailscale_pid)"
+
+        sleep 1
+    else
+        # Start Phoenix server
+        echo "Starting Phoenix server on port $port..."
+        set -l phoenix_pid (start_phoenix $port)
+        echo "Phoenix started (PID: $phoenix_pid)"
+
+        # Wait for Phoenix to start
+        echo "Waiting for Phoenix to initialize..."
+        sleep 5
+
+        # Start Tailscale serve
+        echo "Starting Tailscale serve..."
+        set -l tailscale_pid (start_tailscale_serve $port)
+        echo "Tailscale serve started (PID: $tailscale_pid)"
+
+        # Wait for Tailscale to start
+        echo "Waiting for Tailscale to initialize..."
+        sleep 3
+
+        # Get Tailscale URL
+        set -l url (get_tailscale_url)
+        echo "Tailscale URL: $url"
+
+        # Verify Tailscale serve
+        if test "$url" != "No URL yet" -a "$url" != "Unknown"
+            echo "Verifying Tailscale serve..."
+            if verify_tailscale "$url"
+                echo "✓ Tailscale serve is working!"
+            else
+                echo "⚠ Warning: Could not verify Tailscale serve"
+            end
         end
     end
 
@@ -529,36 +861,49 @@ function main
     # Split window: top 80% for logs, bottom 20% for menu
     tmux split-window -t $SESSION_NAME:main -v -p 20
 
-    # Set up the menu pane (bottom)
+    # Set up the menu pane (bottom) - display static menu
     tmux select-pane -t $SESSION_NAME:main.1
-    tmux send-keys -t $SESSION_NAME:main.1 "cat $TEMP_DIR/help.txt 2>/dev/null || echo 'Loading...'; fish" C-m
+    tmux send-keys -t $SESSION_NAME:main.1 "clear; printf '%s\n' '$(get_menu_text)'; while true; sleep 1000d; end" C-m
 
     # Set up the log pane (top) - tail Phoenix logs
     tmux select-pane -t $SESSION_NAME:main.0
     tmux send-keys -t $SESSION_NAME:main.0 "tail -f $TEMP_DIR/phoenix.log" C-m
+
+    # Focus on the log pane
+    tmux select-pane -t $SESSION_NAME:main.0
 
     # Set up keybindings
     setup_tmux_keybindings $SESSION_NAME
 
     # Start status bar updater in background
     fish -c "
+        set -l session_name $SESSION_NAME
+        set -l script_path $SCRIPT_PATH
+        set -l temp_dir $TEMP_DIR
         while true
-            if not tmux has-session -t $SESSION_NAME 2>/dev/null
+            if not tmux has-session -t \$session_name 2>/dev/null
                 break
             end
-            fish ~/bin/scripts/$SCRIPT_NAME --internal-update-status
+            env TEMP_DIR=\$temp_dir \$script_path --internal-update-status
             sleep 2
         end
     " &
 
-    # Update status bar once
-    update_status_bar
+    set -l updater_pid $last_pid
+    save_state updater_pid $updater_pid
 
-    log_info "action=start status=complete port=$port url=$url"
+    # Update status bar once
+    internal_update_status
+
+    log_info "action=start status=complete port=$port dry_run=$dry_run"
 
     # Attach to tmux session
     echo ""
-    echo "Attaching to TUI... (Press Ctrl+B, then D to detach)"
+    if test "$dry_run" = "true"
+        echo "Attaching to TUI (DRY-RUN MODE)... (Press Ctrl+B, then D to detach)"
+    else
+        echo "Attaching to TUI... (Press Ctrl+B, then D to detach)"
+    end
     sleep 1
 
     tmux attach-session -t $SESSION_NAME
@@ -569,7 +914,8 @@ end
 
 # Parse arguments
 argparse 'h/help' 'v/version' 'test' 'fish-completions' \
-    'internal-stop-all' 'internal-stop-tailscale' \
+    'dry-run' 'kill' 'port=' \
+    'internal-show-help' 'internal-stop-all' 'internal-stop-tailscale' \
     'internal-restart-phoenix' 'internal-restart-tailscale' \
     'internal-update-status' -- $argv
 or begin
@@ -592,7 +938,16 @@ if set -q _flag_fish_completions
     install_fish_completions
 end
 
+if set -q _flag_kill
+    kill_running_instance
+end
+
 # Internal commands for tmux keybindings
+if set -q _flag_internal_show_help
+    internal_show_help
+    exit 0
+end
+
 if set -q _flag_internal_stop_all
     internal_stop_all
     exit 0
@@ -614,9 +969,24 @@ if set -q _flag_internal_restart_tailscale
 end
 
 if set -q _flag_internal_update_status
-    update_status_bar
+    internal_update_status
     exit 0
 end
 
-log_debug "action=init args=\"$argv\""
-main
+# Validate port if specified
+set -l preferred_port
+if set -q _flag_port
+    if not validate_port $_flag_port
+        exit 1
+    end
+    set preferred_port $_flag_port
+end
+
+# Main execution
+set -l dry_run_mode "false"
+if set -q _flag_dry_run
+    set dry_run_mode "true"
+end
+
+log_debug "action=init args=\"$argv\" dry_run=$dry_run_mode port=$preferred_port"
+main $dry_run_mode $preferred_port
