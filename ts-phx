@@ -535,16 +535,10 @@ function get_help_text
 end
 
 function get_menu_text
-    echo "╔══════════════════════════════════════════════════════════════════════════════╗
-║                            COMMAND MENU                                      ║
-║                                                                              ║
-║  Press '/' or 'h' to open command overlay with detailed help                ║
-║                                                                              ║
-║  Quick Commands:                                                            ║
-║    q - Stop all and exit          r - Restart Phoenix                       ║
-║    s - Stop Tailscale serve       t - Restart Tailscale serve               ║
-║    p - List Tailscale peers       h - Show help overlay                     ║
-╚══════════════════════════════════════════════════════════════════════════════╝"
+    printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
+    printf "║ COMMANDS: / or h=Help  q=Quit  r=Restart Phoenix  t=Restart Tailscale       ║\n"
+    printf "║           s=Stop Tailscale  p=List Peers                                    ║\n"
+    printf "╚═════════════════════════════════════════════════════════════════════════════╝\n"
 end
 
 function setup_tmux_keybindings
@@ -724,9 +718,21 @@ function internal_update_status
     set -l tailscale_pid (grep "^tailscale_pid=" "$state_file" 2>/dev/null | cut -d= -f2)
     set -l dry_run (grep "^dry_run=" "$state_file" 2>/dev/null | cut -d= -f2)
 
-    # Get URL
+    # Get or increment spinner state
+    set -l spinner_state (grep "^spinner_state=" "$state_file" 2>/dev/null | cut -d= -f2)
+    if test -z "$spinner_state"
+        set spinner_state 0
+    end
+    set -l spinner_chars "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"
+    set -l spinner_index (math "$spinner_state % 10 + 1")
+    set -l spinner $spinner_chars[$spinner_index]
+
+    # Save next spinner state
     set -gx STATE_FILE "$state_file"
     set -gx TEMP_DIR "$temp_dir"
+    save_state spinner_state (math "$spinner_state + 1")
+
+    # Get URL
     set -l url (get_tailscale_url)
 
     # Check if processes are running
@@ -746,7 +752,7 @@ function internal_update_status
         set mode_indicator "[DRY-RUN] "
     end
 
-    set -l status_text "$mode_indicator Phoenix:$phoenix_status Port:$port | Tailscale:$tailscale_status URL:$url | Press '/' for commands"
+    set -l status_text "$spinner $mode_indicator Phoenix:$phoenix_status Port:$port | Tailscale:$tailscale_status URL:$url | Press '/' for commands"
 
     tmux set-option -t $SESSION_NAME status-right "$status_text"
 end
@@ -863,7 +869,11 @@ function main
 
     # Set up the menu pane (bottom) - display static menu
     tmux select-pane -t $SESSION_NAME:main.1
-    tmux send-keys -t $SESSION_NAME:main.1 "clear; printf '%s\n' '$(get_menu_text)'; while true; sleep 1000d; end" C-m
+    set -l menu_cmd "clear; printf '╔═════════════════════════════════════════════════════════════════════════════╗\\n'; printf '║ COMMANDS: / or h=Help  q=Quit  r=Restart Phoenix  t=Restart Tailscale       ║\\n'; printf '║           s=Stop Tailscale  p=List Peers                                    ║\\n'; printf '╚═════════════════════════════════════════════════════════════════════════════╝\\n'; while true; sleep 1000d; end"
+    tmux send-keys -t $SESSION_NAME:main.1 "$menu_cmd" C-m
+
+    # Disable scrolling on menu pane
+    tmux set-option -p -t $SESSION_NAME:main.1 remain-on-exit on
 
     # Set up the log pane (top) - tail Phoenix logs
     tmux select-pane -t $SESSION_NAME:main.0
