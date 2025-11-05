@@ -1,12 +1,12 @@
 #!/usr/bin/env fish
 
 # Script: worktree
-# Version: 1.2.5
+# Version: 1.3.0
 # Description: Create git worktrees with automatic directory naming and cd to it
 # Installation: Copy to ~/.config/fish/functions/worktree.fish (to enable cd) or ~/bin/scripts
 
 function worktree
-    set -g VERSION "1.2.5"
+    set -g VERSION "1.3.0"
     set -g SCRIPT_NAME "worktree"
 
     function __worktree_log_info
@@ -449,6 +449,19 @@ complete -c worktree -n \"not __fish_seen_subcommand_from --close --force-close 
     set -l branch_name $argv[1]
 
     __worktree_log_debug "action=init branch=\"$branch_name\" tmp=\""(set -q _flag_tmp; and echo "true"; or echo "false")"\""
+
+    # Check if branch name conflicts with reserved command-line options
+    set -l reserved_names "help" "version" "tmp" "close" "force-close" "test" "fish-completions" "h" "v" "t" "c"
+    if contains -- "$branch_name" $reserved_names
+        echo "Warning: Branch name '$branch_name' conflicts with a command-line option" >&2
+        read -l -P "Are you sure you want to create a worktree with this name? (yes/no): " response
+        if test "$response" != "yes"
+            echo "Cancelled." >&2
+            __worktree_log_info "action=cancelled reason=\"reserved_name_rejected\" branch=\"$branch_name\""
+            return 1
+        end
+        __worktree_log_info "action=reserved_name_confirmed branch=\"$branch_name\""
+    end
 
     # Check if we're in a git repository
     if not git rev-parse --git-dir >/dev/null 2>&1
